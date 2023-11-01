@@ -5,7 +5,8 @@ import faulthandler
 
 faulthandler.enable()
 
-def generate_stack(self, ignore_function: List= ['generate_stack'],count: int = 10, counter:bool = False):
+def generate_stack(self, ignore_function: List= [],count: int = 10, counter:bool = False):
+  ignore_function = ['generate_stack'] + ignore_function
   for i in list(reversed(inspect.stack())):
     if ignore_function and i.function not in ignore_function:
       print(f"Function = {i.function} called from {i.filename} at line number ={i.lineno}")
