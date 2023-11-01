@@ -10,14 +10,14 @@ from tinygrad.shape.view import View, strides_for_shape
 from enum import Enum, auto
 
 class OptOps(Enum):
-  UPCAST = auto(); UPCASTMID = auto(); UNROLL = auto(); LOCAL = auto(); LASTLOCAL = auto(); GROUP = auto(); GROUPTOP = auto() # noqa: E702
+  UPCAST = auto(); UPCASTMID = auto(); UNROLL = auto(); LOCAL = auto(); LASTLOCAL = auto(); GROUP = auto(); GROUPTOP = auto(); NOLOCALS = auto() # noqa: E702
   def __lt__(self, x:OptOps): return self.value < x.value
 
 @dataclass(frozen=True, order=True)
 class Opt:
   op: OptOps
-  axis: int
-  amt: int
+  axis: Optional[int] = None
+  amt: Optional[int] = None
   def __repr__(self): return f"Opt(op={self.op}, axis={self.axis}, amt={self.amt})"
 
 class OptimizedKernel(Kernel):
@@ -227,11 +227,18 @@ class OptimizedKernel(Kernel):
     return False
 
   def apply_opt(self, opt:Opt):
+    assert not self.dont_use_locals or opt.op not in {OptOps.LOCAL, OptOps.LASTLOCAL, OptOps.GROUP, OptOps.GROUPTOP, OptOps.UPCASTMID}, "not using locals"
     self.applied_opts.append(opt)
-    axis = opt.axis + (self.first_reduce if opt.op == OptOps.UNROLL else (self.first_reduce+len(self.group_for_reduce) if opt.op == OptOps.GROUP or opt.op == OptOps.GROUPTOP else 0))
-    amt = opt.amt if opt.amt != 0 else self.full_shape[axis]
-    assert self.full_shape[axis] % amt == 0, "no longer valid shift"
-    assert isinstance(amt, int) and amt != 1, "shift of amt 1 or Node is meaningless"
+    if opt.axis is not None:
+      axis = opt.axis + (self.first_reduce if opt.op == OptOps.UNROLL else (self.first_reduce+len(self.group_for_reduce) if opt.op == OptOps.GROUP or opt.op == OptOps.GROUPTOP else 0))
+    else:
+      axis = -1
+    if opt.amt is not None:
+      amt = opt.amt if opt.amt != 0 else self.full_shape[axis]
+      assert self.full_shape[axis] % amt == 0, "no longer valid shift"
+      assert isinstance(amt, int) and amt != 1, "shift of amt 1 or Node is meaningless"
+    else:
+      amt = -1
     if opt.op == OptOps.LOCAL:        # cyan
       assert axis < self.first_reduce, "can't local a reduce"
       assert not(self.tensor_core), "can't local with tensor cores"
@@ -269,6 +276,10 @@ class OptimizedKernel(Kernel):
       assert amt == 4, "don't upcast mid anything but 4"
       self.shift_to(axis, amt, insert_before=self.first_reduce + len(self.group_for_reduce))
       self.group_for_reduce.append(amt)
+    elif opt.op == OptOps.NOLOCALS:
+      assert self.local_dims == 0 and len(self.group_for_reduce) == 0, "can't have no locals with locals"
+      assert not self.dont_use_locals, "already not using locals"
+      self.dont_use_locals = True
     return self.simplify_ones()
 
   def required_optimizations(self, early_only=False):
@@ -367,7 +378,7 @@ class OptimizedKernel(Kernel):
         break
 
     # if last dim is small(ish) and it's a reduce dim, upcast the reduce (loop unrolling). no simplify needed since it's just an upcast. NOTE: careful, this has broken VALIDHACKS
-    if self.first_reduce < (self.shape_len-self.upcasted) and (len(list(self.shape_offsets(self.full_buf_index))) <= 4 or not any(r for _,_,r in self.upcasted_axis(self.full_buf_index))):
+    if self.first_reduce < (self.shape_len-self.upcasted) and (len(list(self.shape_offsets(self.full_buf_index))) <= 4 or not any(r for _,_,r in self.upcasted_axis(self.full_buf_index))) and (self.upcasted == 0 or prod(self.full_shape[-self.upcasted:]) < 64):
       if (s:=self.full_unupcasted_shape[-1]) <= 32 and isinstance(s, int):  # NOTE: cannot loop unroll symbolic axis
         self.apply_opt(Opt(OptOps.UNROLL, len(self.full_unupcasted_shape)-1-self.first_reduce, 0))
         # if it's small, upcast a second reduce dimension too
@@ -389,7 +400,7 @@ class OptimizedKernel(Kernel):
 
     if self.opts.has_local:
       if getenv("NOLOCALS") and self.local_dims == 0 and not self.group_for_reduce:
-        self.dont_use_locals = True
+        self.apply_opt(Opt(OptOps.NOLOCALS))
       else:
         # prioritize making expand axes local
         local_axis_ranking = [(any(self.sts[buf_index].views[-1].strides[axis] == 0 for buf_index in range(len(self.sts))), axis) for axis in range(len(self.full_shape[:self.first_reduce]))]
