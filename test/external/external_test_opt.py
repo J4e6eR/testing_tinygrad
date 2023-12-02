@@ -33,10 +33,10 @@ class CLCache:
     if self.allowed is not None:
       assert len(cache) <= self.allowed and (not self.strict or len(cache) == self.allowed), f"used too many kernels! {len(cache)} > {self.allowed}"
 
-from models.convnext import ConvNeXt
-from models.efficientnet import EfficientNet
-from models.resnet import ResNet18
-from models.vit import ViT
+from extra.models.convnext import ConvNeXt
+from extra.models.efficientnet import EfficientNet
+from extra.models.resnet import ResNet18
+from extra.models.vit import ViT
 from tinygrad.nn.state import get_parameters
 
 @unittest.skipUnless(Device.DEFAULT == "GPU", "Not Implemented")
@@ -85,12 +85,12 @@ class TestInferenceMinKernels(unittest.TestCase):
 
   def test_llama(self):
     from examples.llama import Transformer
-    from tinygrad.shape.symbolic import Variable
-    args_tiny = {"dim": 512, "multiple_of": 256, "n_heads": 8, "n_layers": 4, "norm_eps": 1e-05, "vocab_size": 1000}
+    args_tiny = {"dim": 512, "hidden_dim": 1024, "n_heads": 8, "n_layers": 4, "norm_eps": 1e-05, "vocab_size": 1000}
     model = Transformer(**args_tiny)
     for p in get_parameters(model): p.assign(np.zeros(p.shape, dtype=p.dtype.np))
-    with CLCache(98):
-      model(Tensor([[1,2,3,4]]), 0).realize()
+    inp = Tensor([[1,2,3,4]])
+    with CLCache(100):
+      model(inp, 0).realize()
 
 @unittest.skipUnless(Device.DEFAULT == "GPU", "Not Implemented")
 class TestOptBinOp(unittest.TestCase):
@@ -148,7 +148,7 @@ class TestOptWChild(unittest.TestCase):
     with CLCache():
       c = (a*b).sum()
       d = c+1
-      e = c+2
+      e = c+2 # noqa: F841
       d.realize()
       assert len(CacheCollector.cache) == 2, "don't fuse if you have children"
 
@@ -240,9 +240,9 @@ class TestOpt(unittest.TestCase):
     c1 = nn.Conv2d(3,32,3)
     bn = nn.BatchNorm2d(32, track_running_stats=False)
     # precache the bn
-    img_conv = bn(c1(img)).relu().realize()
+    bn(c1(img)).relu().realize()
     with CLCache():
-      img_conv = bn(c1(img)).relu().realize()
+      bn(c1(img)).relu().realize()
       assert len(CacheCollector.cache) == 1, f"optimizer didn't fold conv-batchnorm at test time, got {len(CacheCollector.cache)}"
 
   def test_fold_conv_batchnorm(self):

@@ -5,7 +5,7 @@ from tinygrad.jit import TinyJit
 from tinygrad.nn.state import get_state_dict
 import json
 
-EXPORT_SUPPORTED_DEVICE = ["WEBGPU", "CLANG", "CUDA", "GPU", "METAL"]
+EXPORT_SUPPORTED_DEVICE = ["WEBGPU", "CLANG", "CUDA", "GPU"]
 
 def compile_net(run:TinyJit, special_names:Dict[int,str]) -> Tuple[Dict[str,str],List[Tuple[str,List[str],List[int]]],Dict[str,Tuple[int,DType,int]],Dict[str,Tensor]]:
   functions, bufs, bufs_to_save, statements, bufnum = {}, {}, {}, [], 0
@@ -17,9 +17,9 @@ def compile_net(run:TinyJit, special_names:Dict[int,str]) -> Tuple[Dict[str,str]
       key = id(arg)
       if key not in bufs:
         if key in special_names:
-          bufs[key] = (special_names[key], arg._memsz, arg.dtype, key)
+          bufs[key] = (special_names[key], arg.size*arg.dtype.itemsize, arg.dtype, key)
         else:
-          bufs[key] = (f"buf_{bufnum}", arg._memsz, arg.dtype, key)
+          bufs[key] = (f"buf_{bufnum}", arg.size*arg.dtype.itemsize, arg.dtype, key)
           bufnum += 1
           if i > 0: bufs_to_save[bufs[key][0]] = arg   # if first usage of a buffer is not an output, and it's not a special name
       cargs.append(bufs[key][0])
@@ -42,9 +42,9 @@ def jit_model(model, *args) -> Tuple[TinyJit,Dict[int,str]]:
 
   # hack to put the inputs back
   for (j,i),idx in run.input_replace.items():
-    realized_input = args[idx[0]].lazydata.realized
+    realized_input = args[idx].lazydata.realized
     run.jit_cache[j].rawbufs[i] = realized_input
-    special_names[id(realized_input)] = f'input{idx[0]}'
+    special_names[id(realized_input)] = f'input{idx}'
 
   # TODO: fetch this from the jit in self.input_replace and self.ret (hint: use get_parameters on self.ret)
   for i, output in enumerate(the_output):

@@ -7,7 +7,7 @@ from tinygrad.ops import Op, UnaryOps, BinaryOps, TernaryOps
 LLVM_FAST_MATH_FLAGS = ('nsz', 'arcp', 'contract', 'afn', 'reassoc') # All from fast math, but nnan and ninf
 
 code_for_op: Final[Dict[Op, Callable]] = {
-  UnaryOps.NEG: lambda builder,x: builder.neg(x) if isinstance(x.type, ir.IntType) else builder.fneg(x, flags=LLVM_FAST_MATH_FLAGS),
+  UnaryOps.NEG: lambda builder,x: builder.neg(x) if isinstance(x.type, ir.IntType) else builder.fneg(x, flags=LLVM_FAST_MATH_FLAGS) if isinstance(x.type, ir.FloatType) else builder.not_(x),
   UnaryOps.EXP2: lambda builder,x: builder.call(builder._block.module.declare_intrinsic('llvm.exp2', [ir.FloatType()]), [x], fastmath=LLVM_FAST_MATH_FLAGS),
   UnaryOps.LOG2: lambda builder,x: builder.call(builder._block.module.declare_intrinsic('llvm.log2', [ir.FloatType()]), [x], fastmath=LLVM_FAST_MATH_FLAGS),
   UnaryOps.SIN: lambda builder,x: builder.call(builder._block.module.declare_intrinsic('llvm.sin', [ir.FloatType()]), [x], fastmath=LLVM_FAST_MATH_FLAGS),
@@ -59,6 +59,8 @@ def cast(bb, val, input_type, output_type):
     if output_type == dtypes.bool: return bb[-1].icmp_signed('!=', val, ir.Constant(val.type, 0))
 
   raise NotImplementedError(f"cast from {input_type} -> {output_type} not implemented")
+
+def const(args, dtype): return ir.Constant(dtype_to_llvm_dtype[dtype], int(args) if dtypes.is_int(dtype) else bool(args) if dtype == dtypes.bool else args)
 
 def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
   # all llvm stuff goes into a module
@@ -113,13 +115,12 @@ def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
     if uop == UOps.DEFINE_GLOBAL:
       lvars[u] = func.args[buf_index[args[0]]]
     if uop == UOps.DEFINE_ACC:
-      lvars[u] = ir.Constant(dtype_to_llvm_dtype[dtype], args)
+      lvars[u] = const(args, dtype)
       reduce_phis.append(u)
     if uop == UOps.SPECIAL:
       lvars[u] = lvars[args.expr]
     if uop == UOps.CONST:
-      value = int(args) if dtypes.is_int(dtype) else bool(args) if dtype == dtypes.bool else args
-      lvars[u] = ir.Constant(dtype_to_llvm_dtype[dtype], value)
+      lvars[u] = const(args, dtype)
     if uop == UOps.LOAD:
       assert dtype is not None
       if len(vin) > 2:
@@ -140,7 +141,10 @@ def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
       lvars[backward] = lvars[u]
     if uop == UOps.STORE:
       element = cast(bb, lvars[vin[2]], vin[2].dtype, vin[0].dtype)
-      bb[-1].store(element, bb[-1].gep(lvars[vin[0]], [lvars[vin[1]]], inbounds=True))
+      def store_op(): bb[-1].store(element, bb[-1].gep(lvars[vin[0]], [lvars[vin[1]]], inbounds=True))
+      if len(vin) > 3:
+        with bb[-1].if_then(bb[-1].trunc(lvars[vin[3]], ir.IntType(1))): store_op()
+      else: store_op()
     if uop == UOps.ALU:
       lvars[u] = cast(bb, code_for_op[args](bb[-1], *[cast(bb, lvars[x], x.dtype, dtypes.float) for x in vin]), dtypes.float, dtype)
     if uop == UOps.CAST: lvars[u] = cast(bb, lvars[vin[0]], vin[0].dtype, dtype)
