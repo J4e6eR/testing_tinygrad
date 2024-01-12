@@ -13,9 +13,9 @@ import onnx
 from tqdm import tqdm
 from typing import Tuple, List, Optional, Dict
 from extra.onnx import get_run_onnx
-from tinygrad.graph import log_schedule_item
-from tinygrad import Tensor, Device
-from tinygrad.helpers import dtypes, partition, GlobalCounters, Context, fetch, getenv, ImageDType, GRAPH, DEBUG
+from tinygrad import Tensor, Device, GlobalCounters, dtypes
+from tinygrad.dtype import ImageDType
+from tinygrad.helpers import partition, Context, fetch, getenv, GRAPH, DEBUG
 from tinygrad.realize import run_schedule, lower_schedule_item
 from tinygrad.ops import LoadOps, ScheduleItem
 Device.DEFAULT = "GPU"
@@ -84,7 +84,7 @@ def test_vs_onnx(onnx_data, schedule:Optional[List[ScheduleItem]], inputs:Dict[s
     return
 
   # set inputs
-  for k,v in inputs.items(): v.lazydata.realized.copyin(new_np_inputs[k].data)
+  for k,v in inputs.items(): v.lazydata.base.realized.copyin(new_np_inputs[k].data)
 
   # run code (all buffers have been allocated)
   GlobalCounters.reset()
@@ -105,15 +105,11 @@ if __name__ == "__main__":
   schedule, schedule_input = partition(schedule, lambda x: x.ast.op not in LoadOps)
   print(f"{len(schedule_input)} inputs")
 
-  run_schedule(schedule_independent, disable_logging=True)
+  run_schedule(schedule_independent)
   run_schedule(schedule_input)
   with Context(DEBUG=max(DEBUG.value, 2), BEAM=getenv("LATEBEAM")):
     image_count = sum(isinstance(si.out.dtype, ImageDType) for si in schedule)
     print(f"**** running real kernels {image_count}/{len(schedule)} images ****")
-
-    if GRAPH:
-      for si in schedule_input: log_schedule_item(si)
-      for si in schedule: log_schedule_item(si)
 
     GlobalCounters.reset()
     run_schedule(schedule[:])

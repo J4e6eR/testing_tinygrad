@@ -1,9 +1,9 @@
 import time
 from pathlib import Path
 import numpy as np
-from tinygrad.tensor import Tensor
+from tinygrad import Tensor, GlobalCounters, dtypes
 from tinygrad.jit import TinyJit
-from tinygrad.helpers import getenv, dtypes, GlobalCounters
+from tinygrad.helpers import getenv
 from examples.mlperf import helpers
 
 def eval_resnet():
@@ -26,12 +26,11 @@ def eval_resnet():
 
   # evaluation on the mlperf classes of the validation set from imagenet
   from extra.datasets.imagenet import iterate
-  from extra.helpers import cross_process
 
   BS = 64
   n,d = 0,0
   st = time.perf_counter()
-  iterator = cross_process(lambda: iterate(BS))
+  iterator = iterate(BS)
   x,ny = next(iterator)
   dat = Tensor(x)
   while dat is not None:
